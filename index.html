@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prix des fermes Minecraft</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div>
+          <p class="kicker">Minecraft</p>
+          <h1>Prix des fermes</h1>
+          <p class="lede">
+            Le prix de vente de ta production, selon la difficulté de la ferme, son rendement, le prix des intrants et ce que tu fais pendant qu'elle tourne.
+            Les trois fermes déjà là sont des exemples : remplace-les par tes chiffres.
+          </p>
+        </div>
+        <p class="rate-line" id="rate-line">10 PC = 1 PF · 10 PF = 1 PO · 10 PO = 1 PD</p>
+      </header>
+
+      <nav class="tabs" aria-label="Sections">
+        <button type="button" class="tab" role="tab" data-action="tab" data-tab="farms" aria-selected="true">Fermes</button>
+        <button type="button" class="tab" role="tab" data-action="tab" data-tab="items" aria-selected="false">Prix des objets</button>
+        <button type="button" class="tab" role="tab" data-action="tab" data-tab="rules" aria-selected="false">Monnaie et règles</button>
+      </nav>
+
+      <div id="view-farms" class="view layout"></div>
+      <div id="view-items" class="view" hidden></div>
+      <div id="view-rules" class="view" hidden></div>
+
+      <p class="footnote" id="storage-note">Les données restent dans ce navigateur.</p>
+    </div>
+    <noscript>Active JavaScript pour calculer les prix.</noscript>
+    <script src="pricing.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
