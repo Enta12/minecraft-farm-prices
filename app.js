@@ -7,13 +7,6 @@ const COIN_SRC = {
   gold: "assets/coins/gold.png",
 };
 
-const COIN_PIECE = {
-  copper: "pièce de cuivre",
-  iron: "pièce de fer",
-  gold: "pièce d'or",
-  diamond: "pièce de diamant",
-};
-
 const FORMULA = [
   "Le prix plancher couvre les intrants, la construction, le temps de travail, le temps de jeu, et une marge.",
   "Coût d'un objet = intrants + construction étalée + travail étalé + temps de jeu.",
@@ -88,7 +81,6 @@ function exampleState() {
         difficulty: 1,
         amortizationHours: 24,
         marginPercent: 30,
-        coinEquivalent: "",
         inputs: [],
         materials: [
           { id: "m1", itemId: "coffre", quantity: 4 },
@@ -109,7 +101,6 @@ function exampleState() {
         difficulty: 3,
         amortizationHours: 24,
         marginPercent: 30,
-        coinEquivalent: "",
         inputs: [{ id: "i1", itemId: "poudre-os", quantityPerHour: 40 }],
         materials: [
           { id: "m3", itemId: "entonnoir", quantity: 8 },
@@ -130,7 +121,6 @@ function exampleState() {
         difficulty: 4,
         amortizationHours: 24,
         marginPercent: 30,
-        coinEquivalent: "iron",
         inputs: [],
         materials: [
           { id: "m5", itemId: "vitre", quantity: 300 },
@@ -193,7 +183,6 @@ function sanitize(raw) {
         difficulty: Math.min(5, Math.max(1, Math.round(num(farm.difficulty, 1)))),
         amortizationHours: Math.max(0, num(farm.amortizationHours, 24)),
         marginPercent: num(farm.marginPercent, 30),
-        coinEquivalent: ["copper", "iron", "gold", "diamond"].includes(farm.coinEquivalent) ? farm.coinEquivalent : "",
         inputs: sanitizeLines(farm.inputs, "quantityPerHour"),
         materials: sanitizeLines(farm.materials, "quantity"),
         flatCost: {
@@ -265,7 +254,6 @@ function blankFarm() {
     difficulty: 2,
     amortizationHours: state.economy.defaultAmortizationHours,
     marginPercent: state.economy.defaultMarginPercent,
-    coinEquivalent: "",
     inputs: [],
     materials: [],
     flatCost: { copper: 0, iron: 0, gold: 0, diamond: 0 },
@@ -358,7 +346,7 @@ function applyField(input) {
   const [scope, a, b] = input.dataset.field.split(":");
   const farm = selectedFarm();
   if (scope === "farm" && farm) {
-    if (a === "name" || a === "outputName" || a === "coinEquivalent" || a === "baseBundle") farm[a] = input.value;
+    if (a === "name" || a === "outputName" || a === "baseBundle") farm[a] = input.value;
     else if (a === "stackSize") farm[a] = Number(input.value);
     else if (a === "packDiscountPercent") farm[a] = Math.min(90, Math.max(0, P.parseAmount(input.value)));
     else if (a === "salePriceCopper") {
@@ -400,7 +388,7 @@ function applyField(input) {
 function readNumericField(input) {
   const [scope, a, b] = input.dataset.field.split(":");
   const farm = selectedFarm();
-  if (scope === "farm" && farm && !["name", "outputName", "coinEquivalent", "baseBundle"].includes(a)) return farm[a];
+  if (scope === "farm" && farm && !["name", "outputName", "baseBundle"].includes(a)) return farm[a];
   if (scope === "input" && farm) return farm.inputs.find((entry) => entry.id === a)?.[b];
   if (scope === "material" && farm) return farm.materials.find((entry) => entry.id === a)?.[b];
   if (scope === "flat" && farm) return farm.flatCost[a];
@@ -708,18 +696,7 @@ function buildEditor() {
       field("Amortissement (heures de marche)", numInput("farm:amortizationHours", farm.amortizationHours)),
       field("Marge minimale (%)", numInput("farm:marginPercent", farm.marginPercent)),
       field("Taille de stack", choiceSelect("farm:stackSize", String(farm.stackSize), [["64", "64"], ["16", "16"], ["1", "1"]])),
-      field(
-        "Comparer à une pièce",
-        choiceSelect("farm:coinEquivalent", farm.coinEquivalent, [
-          ["", "Non"],
-          ["copper", "Cet objet vaut 1 pièce de cuivre"],
-          ["iron", "Cet objet vaut 1 pièce de fer"],
-          ["gold", "Cet objet vaut 1 pièce d'or"],
-          ["diamond", "Cet objet vaut 1 pièce de diamant"],
-        ]),
-      ),
     ),
-    el("p", { class: "hint", text: "Comparer à une pièce sert seulement si tu vends l'objet à la place de cette pièce. Le panneau de droite dit alors s'il te reste du cuivre, ou s'il en manque." }),
     el("p", { class: "hint", text: "1 objet par minute = 60 par heure. L'amortissement étale la construction et le travail sur la durée de marche." }),
     el(
       "div",
@@ -881,7 +858,6 @@ function buildResult() {
       ),
     ),
     bundleBlock(result),
-    result.coinCopper != null ? coinComparison(result) : null,
     result.catalogPrice != null
       ? el("p", {
           class: "compare",
@@ -955,16 +931,6 @@ function bundleBlock(result) {
       );
     }),
   );
-}
-
-function coinComparison(result) {
-  const piece = COIN_PIECE[selectedFarm().coinEquivalent];
-  const gap = result.coinCopper - result.perItem.cost;
-  const worth = P.coinPhrase(result.coinCopper);
-  const text = gap >= 0
-    ? `Cet objet remplace une ${piece} (${worth}). Après le coût, il reste ${coinText(gap)}.`
-    : `Cet objet remplace une ${piece} (${worth}). Il manque ${coinText(Math.abs(gap))} pour couvrir le coût.`;
-  return el("p", { class: "compare", text });
 }
 
 function warningBlock(warnings) {

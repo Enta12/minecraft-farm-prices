@@ -332,7 +332,6 @@
       discountPercent: packDiscount,
     });
     const perHourPrice = priceOverridden ? sale * perHour : roundUp(floor * perHour, roundStep);
-    const coinCopper = values[farm.coinEquivalent] ?? null;
     const outputKey = String(farm.outputName || "").trim().toLocaleLowerCase("fr");
     const catalogItem = outputKey
       ? items.find((item) => item.name.trim().toLocaleLowerCase("fr") === outputKey)
@@ -354,7 +353,6 @@
       bundles: offer.bundles,
       bundleNote: offer.bundleNote,
       baseId: offer.baseId,
-      coinCopper,
       catalogPrice: catalogItem ? Number(catalogItem.priceCopper) || 0 : null,
       catalogItemId: catalogItem ? catalogItem.id : null,
     };
@@ -413,7 +411,6 @@ if (typeof module !== "undefined" && require.main === module) {
     difficulty: 4,
     amortizationHours: 24,
     marginPercent: 30,
-    coinEquivalent: "iron",
     stackSize: 64,
     inputs: [{ itemId: "zero", quantityPerHour: 2 }],
     materials: [
@@ -430,7 +427,6 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.strictEqual(result.perItem.presence, 0);
   assert.ok(Math.abs(result.perItem.cost - 1.3958333333333333) < 1e-12);
   assert.ok(Math.abs(result.perItem.floor - 1.8145833333333333) < 1e-12);
-  assert.strictEqual(result.coinCopper, 10);
   assert.ok(result.bundles.some((bundle) => bundle.recommended));
   assert.ok(result.warnings.some((warning) => warning.includes("Gratuit")));
 
