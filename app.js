@@ -14,8 +14,9 @@ const FORMULA = [
   "Construction étalée = (matériaux + pièces déjà payées) ÷ (production horaire × heures d'amortissement).",
   "Travail étalé = (heures de la difficulté × salaire horaire) ÷ (production horaire × heures d'amortissement).",
   "AFK : le temps de jeu vaut 0. Actif : chaque heure ajoute le rapport du minage. Devant la ferme : chaque heure ajoute le salaire × impact.",
-  "Prix plancher = coût × (1 + marge ÷ 100). Le cuivre ne se coupe pas : le prix monte à la pièce entière, puis à la pièce choisie si tu arrondis plus haut. Un prix écrit à la main remplace le calcul.",
-  "Les lots (1, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker) partent du prix de vente. Le format de base est au prix plein. Chaque format plus gros enlève le pourcentage de remise, une fois par palier.",
+  "Prix plancher = coût × (1 + marge ÷ 100). Ce prix d'objet peut être décimal, y compris s'il est écrit à la main. Il sert tel quel quand l'objet devient un intrant.",
+  "Les lots (1, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker) sont des prix entiers. Chacun monte au cuivre, ou à la pièce choisie si tu arrondis plus haut. Le format de base est au prix plein. Chaque format plus gros enlève le pourcentage de remise, une fois par palier.",
+  "Ferme : la production est un nombre d'objets par heure. À trouver : une trouvaille toutes les X heures, payées au salaire de recherche, puis des heures de travail payées au rapport du minage.",
   "10 PC = 1 PF, 10 PF = 1 PO, 10 PO = 1 PD. Ce taux ne se règle pas.",
 ];
 
@@ -47,7 +48,8 @@ function exampleState() {
   return {
     version: 1,
     economy: {
-      wageCopperPerHour: 64,
+      wageCopperPerHour: 100,
+      searchWageCopperPerHour: 100,
       hoursByDifficulty: [1, 4, 12, 30, 80],
       presenceImpactPercent: 100,
       activeIncomeCopperPerHour: 64,
@@ -76,6 +78,10 @@ function exampleState() {
         stackSize: 64,
         baseBundle: "64",
         packDiscountPercent: 10,
+        source: "farm",
+        findEveryHours: 12,
+        findWorkHours: 4,
+        findYield: 1,
         presence: "afk",
         salePriceCopper: null,
         difficulty: 1,
@@ -96,6 +102,10 @@ function exampleState() {
         stackSize: 64,
         baseBundle: "64",
         packDiscountPercent: 10,
+        source: "farm",
+        findEveryHours: 12,
+        findWorkHours: 4,
+        findYield: 1,
         presence: "present",
         salePriceCopper: null,
         difficulty: 3,
@@ -116,6 +126,10 @@ function exampleState() {
         stackSize: 64,
         baseBundle: "64",
         packDiscountPercent: 10,
+        source: "farm",
+        findEveryHours: 12,
+        findWorkHours: 4,
+        findYield: 1,
         presence: "afk",
         salePriceCopper: null,
         difficulty: 4,
@@ -134,6 +148,40 @@ function exampleState() {
     ],
     ui: { tab: "farms", selectedFarmId: "ferme-ble" },
   };
+}
+
+function migratedFind(farm, legacyYields) {
+  const hasNew = farm.findEveryHours != null || farm.findWorkHours != null || farm.findYield != null;
+  if (hasNew) {
+    return {
+      findEveryHours: Math.max(0, num(farm.findEveryHours, 12)),
+      findWorkHours: Math.max(0, num(farm.findWorkHours, 4)),
+      findYield: Math.max(0, num(farm.findYield, 1)),
+    };
+  }
+  if (farm.findPace === "interval") {
+    return {
+      findEveryHours: Math.max(0, num(farm.findHours, 12)),
+      findWorkHours: 0,
+      findYield: Math.max(0, num(farm.findAmount, 1)),
+    };
+  }
+  if (farm.findPace === "hour") {
+    return {
+      findEveryHours: 1,
+      findWorkHours: 0,
+      findYield: Math.max(0, num(farm.findAmount, 1)),
+    };
+  }
+  if (farm.source === "find") {
+    const level = Math.min(5, Math.max(1, Math.round(num(farm.rarity, 3))));
+    return {
+      findEveryHours: 1,
+      findWorkHours: 0,
+      findYield: Math.max(0, num(legacyYields[level - 1], 1)),
+    };
+  }
+  return { findEveryHours: 12, findWorkHours: 4, findYield: 1 };
 }
 
 function sanitizeLines(lines, qtyKey) {
@@ -159,9 +207,12 @@ function sanitize(raw) {
         .map((item) => ({
           id: String(item.id),
           name: item.name,
-          priceCopper: P.roundUp(Math.max(0, num(item.priceCopper, 0)), 1),
+          priceCopper: Math.round(Math.max(0, num(item.priceCopper, 0)) * 10000) / 10000,
         }))
     : [];
+  const legacyYields = Array.isArray(raw.economy?.yieldByRarity) && raw.economy.yieldByRarity.length === 5
+    ? raw.economy.yieldByRarity
+    : [240, 60, 20, 6, 1];
   const farms = Array.isArray(raw.farms)
     ? raw.farms.filter((farm) => farm && farm.id).map((farm) => ({
         id: String(farm.id),
@@ -171,6 +222,8 @@ function sanitize(raw) {
         stackSize: [1, 16, 64].includes(Number(farm.stackSize)) ? Number(farm.stackSize) : 64,
         baseBundle: ["1", "16", "32", "64", "3s", "9s", "shulker"].includes(farm.baseBundle) ? farm.baseBundle : "64",
         packDiscountPercent: Math.min(90, Math.max(0, num(farm.packDiscountPercent, 10))),
+        source: farm.source === "find" ? "find" : "farm",
+        ...migratedFind(farm, legacyYields),
         presence: ["afk", "active", "present"].includes(farm.presence)
           ? farm.presence
           : farm.afk === false
@@ -179,7 +232,7 @@ function sanitize(raw) {
         salePriceCopper:
           farm.salePriceCopper == null || farm.salePriceCopper === ""
             ? null
-            : P.roundUp(Math.max(0, num(farm.salePriceCopper, 0)), 1),
+            : Math.round(Math.max(0, num(farm.salePriceCopper, 0)) * 10000) / 10000,
         difficulty: Math.min(5, Math.max(1, Math.round(num(farm.difficulty, 1)))),
         amortizationHours: Math.max(0, num(farm.amortizationHours, 24)),
         marginPercent: num(farm.marginPercent, 30),
@@ -198,7 +251,8 @@ function sanitize(raw) {
   return {
     version: 1,
     economy: {
-      wageCopperPerHour: P.roundUp(Math.max(0, num(raw.economy?.wageCopperPerHour, 64)), 1),
+      wageCopperPerHour: P.roundUp(Math.max(0, num(raw.economy?.wageCopperPerHour, 100)), 1),
+      searchWageCopperPerHour: P.roundUp(Math.max(0, num(raw.economy?.searchWageCopperPerHour, 100)), 1),
       hoursByDifficulty: hours,
       presenceImpactPercent: Math.min(100, Math.max(0, num(raw.economy?.presenceImpactPercent, 100))),
       activeIncomeCopperPerHour: P.roundUp(Math.max(0, num(raw.economy?.activeIncomeCopperPerHour, 64)), 1),
@@ -249,6 +303,10 @@ function blankFarm() {
     stackSize: 64,
     baseBundle: "64",
     packDiscountPercent: 10,
+    source: "farm",
+    findEveryHours: 12,
+    findWorkHours: 4,
+    findYield: 1,
     presence: "afk",
     salePriceCopper: null,
     difficulty: 2,
@@ -276,6 +334,10 @@ function el(tag, props, ...children) {
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return node;
+}
+
+function mount(node, ...children) {
+  node.replaceChildren(...children.flat().filter((child) => child != null && child !== false));
 }
 
 function field(label, control) {
@@ -351,8 +413,8 @@ function applyField(input) {
     else if (a === "packDiscountPercent") farm[a] = Math.min(90, Math.max(0, P.parseAmount(input.value)));
     else if (a === "salePriceCopper") {
       const raw = input.value.trim();
-      farm.salePriceCopper = raw === "" ? null : P.roundUp(Math.max(0, P.parseAmount(raw)), 1);
-    } else if (a === "marginPercent") farm[a] = P.parseAmount(input.value);
+      farm.salePriceCopper = raw === "" ? null : Math.round(Math.max(0, P.parseAmount(raw)) * 10000) / 10000;
+    }     else if (a === "marginPercent") farm[a] = P.parseAmount(input.value);
     else farm[a] = Math.max(0, P.parseAmount(input.value));
   } else if (scope === "input" && farm) {
     const line = farm.inputs.find((entry) => entry.id === a);
@@ -370,7 +432,7 @@ function applyField(input) {
     const item = state.items.find((entry) => entry.id === a);
     if (!item) return;
     if (b === "name") item.name = input.value;
-    else item.priceCopper = P.roundUp(Math.max(0, P.parseAmount(input.value)), 1);
+    else item.priceCopper = Math.round(Math.max(0, P.parseAmount(input.value)) * 10000) / 10000;
   } else if (scope === "economy" && a === "hours") {
     state.economy.hoursByDifficulty[Number(b)] = Math.max(0, P.parseAmount(input.value));
   } else if (scope === "economy" && a === "presenceImpactPercent") {
@@ -379,7 +441,7 @@ function applyField(input) {
     const next = P.parseAmount(input.value);
     if (next > 0) state.economy.bundleMaxHours = next;
   } else if (scope === "economy") {
-    const wholeCoin = ["wageCopperPerHour", "activeIncomeCopperPerHour", "bundleMinCopper"].includes(a);
+    const wholeCoin = ["wageCopperPerHour", "searchWageCopperPerHour", "activeIncomeCopperPerHour", "bundleMinCopper"].includes(a);
     const parsed = a === "defaultMarginPercent" ? P.parseAmount(input.value) : Math.max(0, P.parseAmount(input.value));
     state.economy[a] = wholeCoin ? P.roundUp(parsed, 1) : parsed;
   }
@@ -406,7 +468,16 @@ function unitText(itemId) {
 
 function metaText(farm) {
   const name = farm.outputName.trim() || "Objet à nommer";
+  if (farm.source === "find") return `${name} · ${paceLabel(farm)}`;
   return `${name} · ${P.formatAmount(farm.outputPerHour)} / h`;
+}
+
+function paceLabel(farm) {
+  const every = P.formatAmount(farm.findEveryHours);
+  const work = P.formatAmount(farm.findWorkHours);
+  const count = P.formatAmount(farm.findYield);
+  const noun = Number(farm.findYield) === 1 ? "objet" : "objets";
+  return `1 toutes les ${every} h · ${count} ${noun} en ${work} h`;
 }
 
 function difficultyCaption(farm) {
@@ -414,6 +485,13 @@ function difficultyCaption(farm) {
   const hours = state.economy.hoursByDifficulty[farm.difficulty - 1];
   const labor = hours * state.economy.wageCopperPerHour;
   return `${diff.label} · ${P.formatAmount(hours)} h · ${P.coinPhrase(labor)} de travail · ${diff.hint}`;
+}
+
+function paceCaption(farm) {
+  const rate = P.outputRate(farm);
+  const searchPay = P.coinPhrase(state.economy.searchWageCopperPerHour);
+  const workPay = P.coinPhrase(state.economy.activeIncomeCopperPerHour);
+  return `${paceLabel(farm)}, soit ${P.formatAmount(rate)} objets par heure. La recherche est payée ${searchPay} de l'heure, le travail ${workPay} de l'heure.`;
 }
 
 function presenceCaption(farm) {
@@ -437,15 +515,14 @@ function roundTarget(step) {
 function coinText(amount) {
   const value = Number(amount) || 0;
   if (value <= 1e-9) return "0 cuivre";
-  if (value < 1 - 1e-9) return "moins d'1 cuivre";
   return P.coinPhrase(value);
 }
 
 function saleHint(result) {
   const priced = P.coinPhrase(result.suggested);
-  if (result.priceOverridden) return `Prix écrit ici. Le calcul donne ${priced}.`;
-  if (result.roundStep > 1) return `Le prix monte à la pièce de ${roundTarget(result.roundStep)} supérieure.`;
-  return "Le cuivre ne se coupe pas. Le prix monte à la pièce entière.";
+  if (result.priceOverridden) return `Prix d'objet écrit ici. Le calcul donne ${priced}. Les lots restent des prix entiers.`;
+  if (result.roundStep > 1) return `Le prix d'un objet reste décimal. Les lots montent à la pièce de ${roundTarget(result.roundStep)} supérieure.`;
+  return "Le prix d'un objet peut être décimal. Chaque lot monte au cuivre entier.";
 }
 
 function chips(copper, values) {
@@ -478,9 +555,10 @@ function costStory(result) {
   if (perItem.cost <= 0) return "Le coût unitaire est nul avec ces réglages.";
   const parts = [
     { text: (pct) => `Les intrants pèsent ${pct} % du coût.`, value: perItem.input },
-    { text: (pct) => `La construction pèse ${pct} % du coût.`, value: perItem.construction },
-    { text: (pct) => `Le travail pèse ${pct} % du coût.`, value: perItem.labor },
+    { text: (pct) => (result.source === "find" ? `L'équipement pèse ${pct} % du coût.` : `La construction pèse ${pct} % du coût.`), value: perItem.construction },
+    { text: (pct) => (result.source === "find" ? `Le travail une fois trouvé pèse ${pct} % du coût.` : `Le travail pèse ${pct} % du coût.`), value: perItem.labor },
     { text: (pct) => (result.presence === "active" ? `L'activité pèse ${pct} % du coût.` : `La présence pèse ${pct} % du coût.`), value: perItem.presence || 0 },
+    { text: (pct) => `La recherche pèse ${pct} % du coût.`, value: perItem.search || 0 },
   ];
   const shares = percents(parts.map((part) => part.value));
   let best = 0;
@@ -540,12 +618,17 @@ function updateLiveHints() {
   const result = P.evaluate(farm, state);
   const caption = document.getElementById("diff-caption");
   if (caption) caption.textContent = difficultyCaption(farm);
+  const pace = document.getElementById("pace-caption");
+  if (pace && farm.source === "find") pace.textContent = paceCaption(farm);
   const inputTotal = document.getElementById("input-total");
   if (inputTotal) inputTotal.textContent = `${coinText(result.inputCostPerHour)} d'intrants par heure.`;
   const buildTotal = document.getElementById("build-total");
-  if (buildTotal) {
-    buildTotal.textContent = `Construction : ${P.coinPhrase(result.construction)}. Travail : ${P.coinPhrase(result.labor)}.`;
-  }
+    if (buildTotal) {
+      const label = farm.source === "find" ? "Équipement" : "Construction";
+      buildTotal.textContent = farm.source === "find"
+        ? `${label} : ${P.coinPhrase(result.construction)}.`
+        : `${label} : ${P.coinPhrase(result.construction)}. Travail : ${P.coinPhrase(result.labor)}.`;
+    }
   updateEditorPrices();
 }
 
@@ -676,7 +759,8 @@ function buildEditor() {
     return;
   }
 
-  slot.replaceChildren(
+  mount(
+    slot,
     el(
       "div",
       { class: "editor-head" },
@@ -690,15 +774,68 @@ function buildEditor() {
     ),
     el(
       "div",
+      { class: "block" },
+      el("span", { class: "field-label", text: "Origine" }),
+      el(
+        "div",
+        { class: "pills", role: "radiogroup", "aria-label": "Origine de l'objet" },
+        [
+          ["farm", "Ferme"],
+          ["find", "À trouver"],
+        ].map(([mode, label]) =>
+          el("button", {
+            type: "button",
+            class: farm.source === mode ? "pill is-on" : "pill",
+            role: "radio",
+            "aria-checked": farm.source === mode ? "true" : "false",
+            "data-action": "source",
+            "data-source": mode,
+            text: label,
+          }),
+        ),
+      ),
+      el("p", {
+        class: "hint",
+        text: farm.source === "find"
+          ? "Une trouvaille, par exemple une géode, arrive toutes les X heures. Le travail dessus rend les objets vendus."
+          : "Tu indiques combien la ferme produit par heure.",
+      }),
+    ),
+    el(
+      "div",
       { class: "grid-2" },
       field("Objet produit", textInput("farm:outputName", farm.outputName, { placeholder: "Blé, lingot, poudre…" })),
-      field("Production par heure", numInput("farm:outputPerHour", farm.outputPerHour)),
+      farm.source === "find"
+        ? null
+        : field("Production par heure", numInput("farm:outputPerHour", farm.outputPerHour)),
       field("Amortissement (heures de marche)", numInput("farm:amortizationHours", farm.amortizationHours)),
       field("Marge minimale (%)", numInput("farm:marginPercent", farm.marginPercent)),
       field("Taille de stack", choiceSelect("farm:stackSize", String(farm.stackSize), [["64", "64"], ["16", "16"], ["1", "1"]])),
     ),
-    el("p", { class: "hint", text: "1 objet par minute = 60 par heure. L'amortissement étale la construction et le travail sur la durée de marche." }),
-    el(
+    el("p", {
+      class: "hint",
+      text: farm.source === "find"
+        ? "Les heures pour trouver sont payées au salaire de recherche. Les heures de travail, une fois la trouvaille faite, sont payées au rapport du minage. L'amortissement étale le prix de l'équipement."
+        : "1 objet par minute = 60 par heure. L'amortissement étale la construction et le travail sur la durée de marche.",
+    }),
+    farm.source === "find"
+      ? el(
+          "div",
+          { class: "block" },
+          el("span", { class: "field-label", text: "Trouvaille" }),
+          el(
+            "div",
+            { class: "grid-2" },
+            field("Une trouvaille toutes les (heures)", numInput("farm:findEveryHours", farm.findEveryHours)),
+            field("Heures de travail par trouvaille", numInput("farm:findWorkHours", farm.findWorkHours)),
+            field("Objets récupérés", numInput("farm:findYield", farm.findYield)),
+          ),
+          el("p", { id: "pace-caption", class: "hint", text: paceCaption(farm) }),
+        )
+      : null,
+    farm.source === "find"
+      ? null
+      : el(
       "div",
       { class: "block" },
       el("span", { class: "field-label", text: "Difficulté de création" }),
@@ -719,7 +856,9 @@ function buildEditor() {
       ),
       el("p", { id: "diff-caption", class: "hint", text: difficultyCaption(farm) }),
     ),
-    el(
+    farm.source === "find"
+      ? null
+      : el(
       "div",
       { class: "block" },
       el("span", { class: "field-label", text: "Pendant que la ferme tourne" }),
@@ -740,13 +879,22 @@ function buildEditor() {
       ),
       el("p", { id: "presence-caption", class: "hint", text: presenceCaption(farm) }),
     ),
-    lineSection("Intrants consommés par heure", farm.inputs, "input", "add-input", "Aucun intrant.", "input-total"),
-    lineSection("Matériaux pour construire la ferme", farm.materials, "material", "add-material", "Aucun matériau chiffré."),
+    farm.source === "find"
+      ? null
+      : lineSection("Intrants consommés par heure", farm.inputs, "input", "add-input", "Aucun intrant.", "input-total"),
+    farm.source === "find"
+      ? null
+      : lineSection("Matériaux pour construire la ferme", farm.materials, "material", "add-material", "Aucun matériau chiffré."),
     el(
       "section",
       { class: "block" },
-      el("h3", { text: "Coût déjà payé en pièces" }),
-      el("p", { class: "hint", text: "Un montant en pièces, en plus des matériaux listés au-dessus." }),
+      el("h3", { text: farm.source === "find" ? "Prix de l'équipement" : "Coût déjà payé en pièces" }),
+      el("p", {
+        class: "hint",
+        text: farm.source === "find"
+          ? "Pioche, armure, fusées : un prix en pièces, étalé sur l'amortissement."
+          : "Un montant en pièces, en plus des matériaux listés au-dessus.",
+      }),
       el(
         "div",
         { class: "coins" },
@@ -774,7 +922,8 @@ function buildResult() {
   }
   const result = P.evaluate(farm, state);
   if (!result.ok) {
-    slot.replaceChildren(
+    mount(
+      slot,
       el("p", { class: "kicker", text: "Prix de vente" }),
       el("p", { text: result.message }),
       result.warnings.length ? warningBlock(result.warnings) : null,
@@ -782,14 +931,21 @@ function buildResult() {
     return;
   }
 
+  const finding = farm.source === "find";
   const perItem = result.perItem;
-  const shares = [perItem.input, perItem.construction, perItem.labor, perItem.presence || 0];
+  const shares = [
+    perItem.input,
+    perItem.construction,
+    finding ? perItem.search || 0 : perItem.labor,
+    finding ? perItem.labor || 0 : perItem.presence || 0,
+  ];
   const totalShare = shares.reduce((sum, part) => sum + part, 0);
   const widths = shares.map((part) => (totalShare > 0 ? (part / totalShare) * 100 : 0));
   const [inputPct, buildPct, laborPct, presencePct] = percents(shares);
   const output = farm.outputName.trim() || "objet";
 
-  slot.replaceChildren(
+  mount(
+    slot,
     el("p", { class: "kicker", text: "Prix d'une heure" }),
     el(
       "p",
@@ -821,20 +977,40 @@ function buildResult() {
     el(
       "div",
       { class: "legend" },
-      el("span", { class: "in", text: `Intrants ${inputPct} %` }),
-      el("span", { class: "build", text: `Construction ${buildPct} %` }),
-      el("span", { class: "work", text: `Travail ${laborPct} %` }),
-      presencePct > 0
-        ? el("span", { class: "presence", text: `${result.presence === "active" ? "Activité" : "Présence"} ${presencePct} %` })
-        : null,
+      finding ? null : el("span", { class: "in", text: `Intrants ${inputPct} %` }),
+      el("span", { class: "build", text: finding ? `Équipement ${buildPct} %` : `Construction ${buildPct} %` }),
+      finding
+        ? el("span", { class: "work", text: `Recherche ${laborPct} %` })
+        : el("span", { class: "work", text: `Travail ${laborPct} %` }),
+      finding
+        ? el("span", { class: "presence", text: `Travail ${presencePct} %` })
+        : presencePct > 0
+          ? el("span", { class: "presence", text: `${result.presence === "active" ? "Activité" : "Présence"} ${presencePct} %` })
+          : null,
     ),
     el(
       "div",
       { class: "money" },
-      moneyRow("Intrants", perItem.input, `${coinText(result.inputCostPerHour)} par heure`),
-      moneyRow("Construction", perItem.construction, `${coinText(result.construction)} sur ${P.formatAmount(result.amort)} h`),
-      moneyRow("Travail", perItem.labor, `${P.formatAmount(result.laborHours)} h, difficulté ${farm.difficulty}`),
+      finding ? null : moneyRow("Intrants", perItem.input, `${coinText(result.inputCostPerHour)} par heure`),
       moneyRow(
+        finding ? "Équipement" : "Construction",
+        perItem.construction,
+        `${coinText(result.construction)} sur ${P.formatAmount(result.amort)} h`,
+      ),
+      finding
+        ? moneyRow(
+            "Recherche",
+            perItem.search,
+            `${P.formatAmount(farm.findEveryHours)} h pour en trouver une, au salaire de recherche`,
+          )
+        : moneyRow("Travail", perItem.labor, `${P.formatAmount(result.laborHours)} h, difficulté ${farm.difficulty}`),
+      finding
+        ? moneyRow(
+            "Travail",
+            perItem.labor,
+            `${P.formatAmount(farm.findWorkHours)} h une fois trouvée, au rapport du minage`,
+          )
+        : moneyRow(
         result.presence === "active" ? "Activité par heure" : "Présence par heure",
         result.presencePerHour,
         result.presence === "afk"
@@ -972,7 +1148,7 @@ function buildItemsView() {
           "div",
           {},
           el("h2", { text: "Prix des objets" }),
-          el("p", { class: "hint", text: "Le prix payé quand l'objet sert d'intrant ou de matériau. L'unité est le cuivre." }),
+          el("p", { class: "hint", text: "Le prix payé quand l'objet sert d'intrant ou de matériau. Les décimales comptent. L'unité est le cuivre." }),
         ),
         el("button", { type: "button", class: "btn primary", "data-action": "add-item", text: "Ajouter un objet" }),
       ),
@@ -1024,11 +1200,12 @@ function buildRulesView() {
         "section",
         { class: "panel" },
         el("h2", { text: "Difficulté et travail" }),
-        el("p", { class: "hint", text: "Chaque niveau est un temps de construction. Le salaire convertit ce temps en cuivre." }),
+        el("p", { class: "hint", text: "100 cuivre font 1 PO. Le salaire horaire paie la construction des fermes et la présence. Le salaire de recherche paie les heures passées à trouver. Le rapport du minage paie les heures de travail une fois la trouvaille faite." }),
         field("Salaire horaire (cuivre)", numInput("economy:wageCopperPerHour", economy.wageCopperPerHour)),
+        field("Salaire de recherche (cuivre / h)", numInput("economy:searchWageCopperPerHour", economy.searchWageCopperPerHour)),
         field("Rapport d'une heure active, minage (cuivre)", numInput("economy:activeIncomeCopperPerHour", economy.activeIncomeCopperPerHour)),
         field("Impact si tu restes devant la ferme (%)", numInput("economy:presenceImpactPercent", economy.presenceImpactPercent)),
-        el("p", { class: "hint", text: "L'arrondi et le prix écrit se règlent dans le panneau de droite, sur chaque ferme. Une pièce de cuivre ne se coupe pas." }),
+        el("p", { class: "hint", text: "L'arrondi des lots se règle dans le panneau de droite. Le prix d'un objet peut rester décimal." }),
         field("Prix minimum d'un lot (cuivre)", numInput("economy:bundleMinCopper", economy.bundleMinCopper)),
         field("Temps maximum pour remplir un lot (heures)", numInput("economy:bundleMaxHours", economy.bundleMaxHours)),
         el(
@@ -1254,6 +1431,16 @@ function resetExamples() {
   showTab("farms", { rebuild: true });
 }
 
+function setSource(source) {
+  const farm = selectedFarm();
+  if (!farm || !["farm", "find"].includes(source)) return;
+  farm.source = source;
+  save();
+  buildFarmButtons();
+  buildEditor();
+  refreshDerived();
+}
+
 function setPresence(mode) {
   const farm = selectedFarm();
   if (!farm || !["afk", "active", "present"].includes(mode)) return;
@@ -1282,7 +1469,7 @@ function setDifficulty(level) {
   const farm = selectedFarm();
   if (!farm) return;
   farm.difficulty = level;
-  document.querySelectorAll(".diff").forEach((button) => {
+  document.querySelectorAll("[data-action='difficulty']").forEach((button) => {
     const on = Number(button.dataset.level) === level;
     button.classList.toggle("is-on", on);
     button.setAttribute("aria-checked", on ? "true" : "false");
@@ -1333,6 +1520,7 @@ function onClick(event) {
   else if (action === "delete-farm") deleteFarm();
   else if (action === "difficulty") setDifficulty(Number(actionEl.dataset.level));
   else if (action === "presence") setPresence(actionEl.dataset.presence);
+  else if (action === "source") setSource(actionEl.dataset.source);
   else if (action === "clear-sale") clearSale();
   else if (action === "add-input") addLine("input");
   else if (action === "remove-input") removeLine("input", actionEl.dataset.id);

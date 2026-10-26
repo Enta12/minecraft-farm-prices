@@ -125,6 +125,7 @@ h3 { font-size: 1rem; }
 .btn,
 .pill,
 .diff,
+.rarity,
 .icon-btn {
   border-radius: 0;
   border: 2px solid #000;
@@ -140,6 +141,7 @@ h3 { font-size: 1rem; }
 .btn.primary,
 .pill.is-on,
 .diff.is-on,
+.rarity.is-on,
 .farm-btn.is-on {
   background: #5d5d5d;
   color: var(--chat);
@@ -242,7 +244,7 @@ input, select {
 
 .diffs { display: flex; gap: 8px; margin-top: 6px; }
 
-.diff { width: 2.5rem; height: 2.5rem; }
+.diff, .rarity { width: 2.5rem; height: 2.5rem; }
 
 .block { display: grid; gap: 8px; }
 .lines { display: grid; gap: 8px; }
