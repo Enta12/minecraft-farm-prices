@@ -164,12 +164,15 @@
       : (tiers.find((row) => row.id === "64")?.id || tiers[0].id);
     const rawCut = Number(options.discountPercent);
     const discountPercent = Number.isFinite(rawCut) ? Math.min(90, Math.max(0, rawCut)) : 0;
+    const rawBox = Number(options.shulkerCopper);
+    const shulkerCopper = Number.isFinite(rawBox) ? Math.max(0, rawBox) : 0;
     const baseIndex = tiers.findIndex((row) => row.id === baseId);
     const catalog = tiers.map((row) => {
       const step = [1, 10, 100, 1000].includes(Number(options.roundStep)) ? Number(options.roundStep) : 1;
       const steps = Math.max(0, tiers.findIndex((tier) => tier.id === row.id) - baseIndex);
       const discount = Math.min(90, steps * discountPercent);
-      const exact = floor * row.count * (1 - discount / 100);
+      const box = row.id === "shulker" ? shulkerCopper : 0;
+      const exact = floor * row.count * (1 - discount / 100) + box;
       const price = roundUp(Math.max(0, exact), step);
       const hours = perHour > 0 ? row.count / perHour : Infinity;
       return {
@@ -178,6 +181,7 @@
         hours,
         duration: durationLabel(hours),
         discount,
+        box,
         base: row.id === baseId,
         readable: price + 1e-9 >= minCopper,
         feasible: hours <= maxHours + 1e-9,
@@ -214,6 +218,7 @@
       maxHours,
       baseId,
       discountPercent,
+      shulkerCopper,
       bundles: shown.map((row) => ({
         id: row.id,
         label: row.label,
@@ -222,6 +227,7 @@
         hours: row.hours,
         duration: row.duration,
         discount: row.discount,
+        box: row.box,
         base: row.base,
         recommended: row.id === recommended.id,
       })),
@@ -364,6 +370,7 @@
       roundStep,
       baseId: farm.baseBundle,
       discountPercent: packDiscount,
+      shulkerCopper: state.economy?.shulkerCopper,
     });
     const perHourPrice = sale * perHour;
     const outputKey = String(farm.outputName || "").trim().toLocaleLowerCase("fr");
@@ -387,6 +394,7 @@
       bundles: offer.bundles,
       bundleNote: offer.bundleNote,
       baseId: offer.baseId,
+      shulkerCopper: offer.shulkerCopper,
       catalogPrice: catalogItem ? Number(catalogItem.priceCopper) || 0 : null,
       catalogItemId: catalogItem ? catalogItem.id : null,
     };
@@ -539,6 +547,21 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.ok(biggerPack.price < 2 * biggerPack.count);
   assert.strictEqual(smallerPack.discount, 0);
   assert.strictEqual(smallerPack.price, 32);
+  assert.strictEqual(packs.bundles.find((bundle) => bundle.id === "shulker").box, 0);
+
+  const boxed = api.proposeBundles(2, 100, 64, {
+    roundStep: 1,
+    baseId: "64",
+    discountPercent: 10,
+    minCopper: 1,
+    maxHours: 100,
+    shulkerCopper: 20,
+  });
+  const shulkerPack = boxed.bundles.find((bundle) => bundle.id === "shulker");
+  assert.strictEqual(shulkerPack.box, 20);
+  assert.strictEqual(shulkerPack.discount, 30);
+  assert.strictEqual(shulkerPack.price, 2440);
+  assert.ok(boxed.bundles.filter((bundle) => bundle.id !== "shulker").every((bundle) => bundle.box === 0));
 
   const active = api.evaluate({ ...farm, presence: "active", inputs: [] }, {
     ...state,

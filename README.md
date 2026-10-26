@@ -21,7 +21,7 @@ prix de vente = prix saisi, sinon le plancher. Ce prix d'objet peut être décim
 Les lots proposés (1, 16, shulker…) sont des prix entiers.
 ```
 
-Le résultat propose les quantités qui ont du sens pour cette ferme : 1 objet, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker. Chaque ferme choisit son format de base, vendu au prix plein. Chaque format plus gros retire un pourcentage réglable du prix unitaire.
+Le résultat propose les quantités qui ont du sens pour cette ferme : 1 objet, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker. Chaque ferme choisit son format de base, vendu au prix plein. Chaque format plus gros retire un pourcentage réglable du prix unitaire. Le format shulker ajoute le prix d'une boîte, réglé dans Monnaie et règles, à 2 PF par défaut.
 
 Ouvre `index.html` dans le navigateur. Les fermes restent enregistrées dans ce navigateur. L'onglet **Monnaie et règles** règle l'impact de la difficulté, du salaire, de la présence et des lots, puis exporte les données en JSON.
 

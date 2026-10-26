@@ -15,7 +15,7 @@ const FORMULA = [
   "Travail étalé = (heures de la difficulté × salaire horaire) ÷ (production horaire × heures d'amortissement).",
   "AFK : le temps de jeu vaut 0. Actif : chaque heure ajoute le rapport du minage. Devant la ferme : chaque heure ajoute le salaire × impact.",
   "Prix plancher = coût × (1 + marge ÷ 100). Ce prix d'objet peut être décimal, y compris s'il est écrit à la main. Il sert tel quel quand l'objet devient un intrant.",
-  "Les lots (1, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker) sont des prix entiers. Chacun monte au cuivre, ou à la pièce choisie si tu arrondis plus haut. Le format de base est au prix plein. Chaque format plus gros enlève le pourcentage de remise, une fois par palier.",
+  "Les lots (1, 16, 32, 64, 3 stacks, 9 stacks, 1 shulker) sont des prix entiers. Chacun monte au cuivre, ou à la pièce choisie si tu arrondis plus haut. Le format de base est au prix plein. Chaque format plus gros enlève le pourcentage de remise, une fois par palier. Le format shulker ajoute le prix d'une boîte, 2 PF par défaut.",
   "Ferme : la production est un nombre d'objets par heure. À trouver : une trouvaille toutes les X heures, payées au salaire de recherche, puis des heures de travail payées au rapport du minage.",
   "10 PC = 1 PF, 10 PF = 1 PO, 10 PO = 1 PD. Ce taux ne se règle pas.",
 ];
@@ -56,6 +56,7 @@ function exampleState() {
       priceRoundStep: 1,
       bundleMinCopper: 1,
       bundleMaxHours: 8,
+      shulkerCopper: 20,
       defaultAmortizationHours: 24,
       defaultMarginPercent: 30,
     },
@@ -261,6 +262,7 @@ function sanitize(raw) {
         : 1,
       bundleMinCopper: P.roundUp(Math.max(0, num(raw.economy?.bundleMinCopper, 1)), 1),
       bundleMaxHours: Math.max(1, num(raw.economy?.bundleMaxHours, 8)),
+      shulkerCopper: P.roundUp(Math.max(0, num(raw.economy?.shulkerCopper, 20)), 1),
       defaultAmortizationHours: Math.max(0, num(raw.economy?.defaultAmortizationHours, 24)),
       defaultMarginPercent: num(raw.economy?.defaultMarginPercent, 30),
     },
@@ -441,7 +443,7 @@ function applyField(input) {
     const next = P.parseAmount(input.value);
     if (next > 0) state.economy.bundleMaxHours = next;
   } else if (scope === "economy") {
-    const wholeCoin = ["wageCopperPerHour", "searchWageCopperPerHour", "activeIncomeCopperPerHour", "bundleMinCopper"].includes(a);
+    const wholeCoin = ["wageCopperPerHour", "searchWageCopperPerHour", "activeIncomeCopperPerHour", "bundleMinCopper", "shulkerCopper"].includes(a);
     const parsed = a === "defaultMarginPercent" ? P.parseAmount(input.value) : Math.max(0, P.parseAmount(input.value));
     state.economy[a] = wholeCoin ? P.roundUp(parsed, 1) : parsed;
   }
@@ -604,6 +606,8 @@ function updateRulePreview() {
   const active = state.economy.activeIncomeCopperPerHour;
   const presence = state.economy.wageCopperPerHour * (state.economy.presenceImpactPercent / 100);
   preview.textContent = `Une ferme difficile, c'est ${P.formatAmount(hours)} h de construction, soit ${P.coinPhrase(labor)}. Une heure de minage ajoute ${P.coinPhrase(active)}. Devant la ferme, une heure ajoute ${P.coinPhrase(presence)}.`;
+  const shulker = document.getElementById("shulker-price-hint");
+  if (shulker) shulker.textContent = `Soit ${P.coinPhrase(state.economy.shulkerCopper)}. Ce montant s'ajoute au format 1 shulker, après la remise.`;
 }
 
 function updateEditorPrices() {
@@ -1100,13 +1104,20 @@ function bundleBlock(result) {
           el("strong", { text: title }),
           el("span", {
             class: "hint",
-            text: bundle.discount > 0 ? `${bundle.duration} · −${P.formatAmount(bundle.discount)} %` : bundle.duration,
+            text: bundleCaption(bundle),
           }),
         ),
         el("div", { class: "money-num", text: P.coinPhrase(bundle.price) }),
       );
     }),
   );
+}
+
+function bundleCaption(bundle) {
+  const bits = [bundle.duration];
+  if (bundle.discount > 0) bits.push(`−${P.formatAmount(bundle.discount)} %`);
+  if (bundle.box > 0) bits.push(`boîte ${P.coinPhrase(bundle.box)}`);
+  return bits.join(" · ");
 }
 
 function warningBlock(warnings) {
@@ -1208,6 +1219,8 @@ function buildRulesView() {
         el("p", { class: "hint", text: "L'arrondi des lots se règle dans le panneau de droite. Le prix d'un objet peut rester décimal." }),
         field("Prix minimum d'un lot (cuivre)", numInput("economy:bundleMinCopper", economy.bundleMinCopper)),
         field("Temps maximum pour remplir un lot (heures)", numInput("economy:bundleMaxHours", economy.bundleMaxHours)),
+        field("Prix d'un shulker (cuivre)", numInput("economy:shulkerCopper", economy.shulkerCopper)),
+        el("p", { id: "shulker-price-hint", class: "hint" }),
         el(
           "div",
           { class: "hours" },
