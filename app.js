@@ -28,6 +28,8 @@ const ROUND_OPTIONS = [
 ];
 
 let state = load();
+let arranging = false;
+let dragPayload = "";
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -60,6 +62,11 @@ function exampleState() {
       defaultAmortizationHours: 24,
       defaultMarginPercent: 30,
     },
+    categories: [
+      { id: "cat-agri", name: "Agriculture", parentId: null },
+      { id: "cat-ble", name: "Blé", parentId: "cat-agri" },
+      { id: "cat-minerai", name: "Minerais", parentId: null },
+    ],
     items: [
       { id: "ble", name: "Blé", priceCopper: 1 },
       { id: "poudre-os", name: "Poudre d'os", priceCopper: 8 },
@@ -73,6 +80,7 @@ function exampleState() {
     farms: [
       {
         id: "ferme-ble",
+        categoryId: "cat-ble",
         name: "Champ de blé",
         outputName: "Blé",
         outputPerHour: 400,
@@ -97,6 +105,7 @@ function exampleState() {
       },
       {
         id: "ferme-ble-os",
+        categoryId: "cat-ble",
         name: "Champ de blé à la poudre d'os",
         outputName: "Blé",
         outputPerHour: 1000,
@@ -121,6 +130,7 @@ function exampleState() {
       },
       {
         id: "ferme-fer",
+        categoryId: "cat-minerai",
         name: "Ferme à fer",
         outputName: "Lingot de fer",
         outputPerHour: 120,
@@ -147,7 +157,7 @@ function exampleState() {
         flatCost: { copper: 0, iron: 0, gold: 0, diamond: 0 },
       },
     ],
-    ui: { tab: "farms", selectedFarmId: "ferme-ble" },
+    ui: { tab: "farms", selectedFarmId: "ferme-ble", collapsedIds: [] },
   };
 }
 
@@ -214,9 +224,12 @@ function sanitize(raw) {
   const legacyYields = Array.isArray(raw.economy?.yieldByRarity) && raw.economy.yieldByRarity.length === 5
     ? raw.economy.yieldByRarity
     : [240, 60, 20, 6, 1];
+  const categories = sanitizeCategories(raw.categories);
+  const categoryIds = new Set(categories.map((category) => category.id));
   const farms = Array.isArray(raw.farms)
     ? raw.farms.filter((farm) => farm && farm.id).map((farm) => ({
         id: String(farm.id),
+        categoryId: categoryIds.has(String(farm.categoryId || "")) ? String(farm.categoryId) : null,
         name: String(farm.name ?? ""),
         outputName: String(farm.outputName ?? ""),
         outputPerHour: Math.max(0, num(farm.outputPerHour, 0)),
@@ -267,8 +280,15 @@ function sanitize(raw) {
       defaultMarginPercent: num(raw.economy?.defaultMarginPercent, 30),
     },
     items,
+    categories,
     farms,
-    ui: { tab, selectedFarmId: selected },
+    ui: {
+      tab,
+      selectedFarmId: selected,
+      collapsedIds: Array.isArray(raw.ui?.collapsedIds)
+        ? [...new Set(raw.ui.collapsedIds.map((id) => String(id)))].filter((id) => categoryIds.has(id))
+        : [],
+    },
   };
 }
 
@@ -299,6 +319,7 @@ function selectedFarm() {
 function blankFarm() {
   return {
     id: uid(),
+    categoryId: null,
     name: "Nouvelle ferme",
     outputName: "",
     outputPerHour: 64,
@@ -713,34 +734,576 @@ function lineSection(title, lines, kind, addAction, emptyText, totalId) {
   );
 }
 
-function buildFarmButtons() {
-  const slot = document.getElementById("farm-list");
-  if (!state.farms.length) {
-    slot.replaceChildren(el("p", { class: "hint", text: "Aucune ferme pour l'instant." }));
-    return;
+// Ancienne sauvegarde : pas de catégories, chaque ferme reste sans catégorie.
+// Un seul niveau de sous-catégorie. Un parent déjà sous-catégorie est aplati.
+function sanitizeCategories(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const categories = [];
+  for (const entry of raw) {
+    if (!entry || entry.id == null || entry.id === "") continue;
+    const id = String(entry.id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    categories.push({
+      id,
+      name: String(entry.name ?? "").slice(0, 60),
+      parentId: entry.parentId == null || entry.parentId === "" ? null : String(entry.parentId),
+    });
   }
-  slot.replaceChildren(
-    ...state.farms.map((farm) => {
-      const result = P.evaluate(farm, state);
-      return el(
-        "button",
-        {
-          type: "button",
-          class: farm.id === state.ui.selectedFarmId ? "farm-btn is-on" : "farm-btn",
-          "data-action": "select-farm",
-          "data-id": farm.id,
-        },
-        el("span", { class: "farm-name", "data-list-name": farm.id, text: farm.name.trim() || "Sans nom" }),
-        el("span", { class: "farm-meta", "data-list-meta": farm.id, text: metaText(farm) }),
-        el("span", {
-          class: "farm-price",
-          "data-list-price": farm.id,
-          text: result.ok ? `${P.formatAmount(result.perHourPrice)} c / h` : "—",
-        }),
-      );
-    }),
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  for (const category of categories) {
+    const parent = category.parentId ? byId.get(category.parentId) : null;
+    if (!parent || parent.id === category.id) {
+      category.parentId = null;
+      continue;
+    }
+    if (parent.parentId) {
+      const grand = byId.get(parent.parentId);
+      category.parentId = grand && grand.id !== category.id && !grand.parentId ? grand.id : null;
+    }
+  }
+  for (const category of categories) {
+    const parent = category.parentId ? byId.get(category.parentId) : null;
+    if (!parent || parent.parentId) category.parentId = null;
+  }
+  return categories;
+}
+
+function askName(message, current) {
+  const value = window.prompt(message, current || "");
+  if (value == null) return null;
+  const name = value.trim().slice(0, 60);
+  return name || null;
+}
+
+function createCategory(name, parentId) {
+  const parent = parentId
+    ? state.categories.find((category) => category.id === parentId && !category.parentId)
+    : null;
+  if (parentId && !parent) return null;
+  const category = { id: uid(), name, parentId: parent ? parent.id : null };
+  state.categories.push(category);
+  return category;
+}
+
+function insertFarmAfter(farm, afterId) {
+  const index = afterId ? state.farms.findIndex((entry) => entry.id === afterId) : -1;
+  if (index >= 0) state.farms.splice(index + 1, 0, farm);
+  else state.farms.unshift(farm);
+}
+
+function farmsIn(categoryId) {
+  const key = categoryId || null;
+  return state.farms.filter((farm) => (farm.categoryId || null) === key);
+}
+
+function splitPayload(value) {
+  const text = String(value || "");
+  const index = text.indexOf(":");
+  if (index < 0) return ["", ""];
+  return [text.slice(0, index), text.slice(index + 1)];
+}
+
+function canDrop(payload, target) {
+  const [kind, id] = splitPayload(payload);
+  const [zoneKind, zoneId] = splitPayload(target);
+  if (!kind || !zoneKind) return false;
+  if (kind === "farm") return zoneKind === "farm" || zoneKind === "into" || zoneKind === "cat";
+  if (kind !== "cat" || zoneKind !== "cat" || id === zoneId) return false;
+  const category = state.categories.find((entry) => entry.id === id);
+  const other = state.categories.find((entry) => entry.id === zoneId);
+  return !!category && !!other && (category.parentId || null) === (other.parentId || null);
+}
+
+function dragHandle(payload, label) {
+  return el("button", {
+    type: "button",
+    class: "move-btn drag-handle",
+    draggable: "true",
+    "data-drag": payload,
+    "aria-label": label,
+    text: "↕",
+  });
+}
+
+function moveButton(action, id, dir, disabled) {
+  return el("button", {
+    type: "button",
+    class: "move-btn",
+    "data-action": action,
+    "data-id": id,
+    "data-dir": dir,
+    disabled,
+    "aria-label": dir === "up" ? "Monter" : "Descendre",
+    text: dir === "up" ? "↑" : "↓",
+  });
+}
+
+function swapEntries(list, a, b) {
+  const i = list.indexOf(a);
+  const j = list.indexOf(b);
+  if (i < 0 || j < 0 || i === j) return false;
+  list[i] = b;
+  list[j] = a;
+  return true;
+}
+
+function moveWithin(list, entry, dir, siblings) {
+  const index = siblings.indexOf(entry);
+  const next = index + (dir === "up" ? -1 : 1);
+  if (index < 0 || next < 0 || next >= siblings.length) return false;
+  return swapEntries(list, entry, siblings[next]);
+}
+
+function moveFarm(id, dir) {
+  const farm = state.farms.find((entry) => entry.id === id);
+  if (!farm || !moveWithin(state.farms, farm, dir, farmsIn(farm.categoryId))) return;
+  save();
+  buildFarmButtons();
+}
+
+function moveCategory(id, dir) {
+  const category = state.categories.find((entry) => entry.id === id);
+  if (!category) return;
+  const siblings = state.categories.filter((entry) => (entry.parentId || null) === (category.parentId || null));
+  if (!moveWithin(state.categories, category, dir, siblings)) return;
+  save();
+  buildFarmButtons();
+}
+
+function moveFarmBefore(id, beforeId) {
+  if (!id || id === beforeId) return false;
+  const farm = state.farms.find((entry) => entry.id === id);
+  const before = state.farms.find((entry) => entry.id === beforeId);
+  if (!farm || !before) return false;
+  const previousCategory = farm.categoryId || null;
+  const previous = state.farms.slice();
+  farm.categoryId = before.categoryId || null;
+  const rest = previous.filter((entry) => entry.id !== id);
+  rest.splice(rest.findIndex((entry) => entry.id === beforeId), 0, farm);
+  state.farms = rest;
+  if (previous.every((entry, index) => entry === rest[index]) && previousCategory === (farm.categoryId || null)) return false;
+  return previousCategory === (farm.categoryId || null) ? "order" : "category";
+}
+
+function moveFarmInto(id, categoryId) {
+  const farm = state.farms.find((entry) => entry.id === id);
+  if (!farm) return false;
+  const key = categoryId || null;
+  if (key && !state.categories.some((category) => category.id === key)) return false;
+  const previousCategory = farm.categoryId || null;
+  const group = state.farms.filter((entry) => (entry.categoryId || null) === key);
+  if (previousCategory === key && group[group.length - 1] === farm) return false;
+  farm.categoryId = key;
+  const rest = state.farms.filter((entry) => entry.id !== id);
+  let last = -1;
+  rest.forEach((entry, index) => {
+    if ((entry.categoryId || null) === key) last = index;
+  });
+  rest.splice(last + 1, 0, farm);
+  state.farms = rest;
+  return previousCategory === key ? "order" : "category";
+}
+
+function moveCategoryBefore(id, beforeId) {
+  if (!id || id === beforeId) return false;
+  const category = state.categories.find((entry) => entry.id === id);
+  const before = state.categories.find((entry) => entry.id === beforeId);
+  if (!category || !before) return false;
+  if ((category.parentId || null) !== (before.parentId || null)) return false;
+  const previous = state.categories.slice();
+  const rest = previous.filter((entry) => entry.id !== id);
+  rest.splice(rest.findIndex((entry) => entry.id === beforeId), 0, category);
+  if (previous.every((entry, index) => entry === rest[index])) return false;
+  state.categories = rest;
+  return "order";
+}
+
+function toggleArrange() {
+  arranging = !arranging;
+  const button = document.querySelector("[data-action='toggle-arrange']");
+  if (button) {
+    button.textContent = arranging ? "Terminer" : "Ranger";
+    button.classList.toggle("is-on", arranging);
+    button.setAttribute("aria-pressed", arranging ? "true" : "false");
+  }
+  buildFarmButtons();
+}
+
+function toggleCategory(id) {
+  if (!state.categories.some((category) => category.id === id)) return;
+  const ids = new Set(state.ui.collapsedIds || []);
+  if (ids.has(id)) ids.delete(id);
+  else ids.add(id);
+  state.ui.collapsedIds = [...ids];
+  save();
+  buildFarmButtons();
+}
+
+function addCategory() {
+  const name = askName("Nom de la catégorie");
+  if (!name) return;
+  createCategory(name, null);
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function addSubcategory(parentId) {
+  if (!state.categories.some((category) => category.id === parentId && !category.parentId)) return;
+  const name = askName("Nom de la sous-catégorie");
+  if (!name) return;
+  createCategory(name, parentId);
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function renameCategory(id) {
+  const category = state.categories.find((entry) => entry.id === id);
+  if (!category) return;
+  const name = askName(category.parentId ? "Nom de la sous-catégorie" : "Nom de la catégorie", category.name);
+  if (!name) return;
+  category.name = name;
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function deleteCategory(id) {
+  const category = state.categories.find((entry) => entry.id === id);
+  if (!category) return;
+  const subs = state.categories.filter((entry) => entry.parentId === id);
+  const label = category.name.trim() || "Sans nom";
+  const message = category.parentId
+    ? `Supprimer la sous-catégorie « ${label} » ? Ses fermes restent dans la catégorie.`
+    : subs.length
+      ? `Supprimer « ${label} » et ${subs.length} sous-catégorie${subs.length > 1 ? "s" : ""} ? Les fermes restent, sans catégorie.`
+      : `Supprimer « ${label} » ? Les fermes restent, sans catégorie.`;
+  if (!window.confirm(message)) return;
+  const removeIds = new Set([id, ...subs.map((entry) => entry.id)]);
+  for (const farm of state.farms) {
+    if (removeIds.has(farm.categoryId)) farm.categoryId = category.parentId || null;
+  }
+  state.categories = state.categories.filter((entry) => !removeIds.has(entry.id));
+  state.ui.collapsedIds = (state.ui.collapsedIds || []).filter((entry) => !removeIds.has(entry));
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function setFarmCategory(value) {
+  const farm = selectedFarm();
+  if (!farm) return;
+  if (value === "__new__") {
+    const name = askName("Nom de la catégorie");
+    if (!name) {
+      buildEditor();
+      return;
+    }
+    const category = createCategory(name, null);
+    farm.categoryId = category ? category.id : null;
+  } else {
+    const category = state.categories.find((entry) => entry.id === value && !entry.parentId);
+    farm.categoryId = category ? category.id : null;
+  }
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function setFarmSubcategory(value) {
+  const farm = selectedFarm();
+  if (!farm) return;
+  const current = state.categories.find((entry) => entry.id === farm.categoryId);
+  const parentId = current ? current.parentId || current.id : null;
+  if (!parentId) return;
+  if (value === "__new__") {
+    const name = askName("Nom de la sous-catégorie");
+    if (!name) {
+      buildEditor();
+      return;
+    }
+    const category = createCategory(name, parentId);
+    if (category) farm.categoryId = category.id;
+  } else if (!value) {
+    farm.categoryId = parentId;
+  } else if (state.categories.some((entry) => entry.id === value && entry.parentId === parentId)) {
+    farm.categoryId = value;
+  }
+  save();
+  buildFarmButtons();
+  buildEditor();
+}
+
+function categorySelect(action, selectedId, options, extra = {}) {
+  const select = el("select", { "data-action": action, disabled: extra.disabled || false });
+  const empty = el("option", { value: "", text: extra.empty || "Sans catégorie" });
+  select.append(empty);
+  for (const option of options) {
+    const node = el("option", { value: option.id, text: option.name.trim() || "Sans nom" });
+    if (option.id === selectedId) node.selected = true;
+    select.append(node);
+  }
+  if (!extra.disabled) select.append(el("option", { value: "__new__", text: extra.fresh || "Nouvelle catégorie…" }));
+  if (!selectedId) empty.selected = true;
+  return select;
+}
+
+function placementFields(farm) {
+  const tops = state.categories.filter((category) => !category.parentId);
+  const current = state.categories.find((category) => category.id === farm.categoryId) || null;
+  const parentId = current ? current.parentId || current.id : "";
+  const subId = current && current.parentId ? current.id : "";
+  const subs = parentId ? state.categories.filter((category) => category.parentId === parentId) : [];
+  return el(
+    "div",
+    { class: "grid-2" },
+    field("Catégorie", categorySelect("set-farm-category", parentId, tops)),
+    field("Sous-catégorie", categorySelect("set-farm-subcategory", subId, subs, {
+      disabled: !parentId,
+      empty: "Aucune",
+      fresh: "Nouvelle sous-catégorie…",
+    })),
   );
 }
+
+function farmRow(farm, index, count) {
+  const result = P.evaluate(farm, state);
+  const on = farm.id === state.ui.selectedFarmId;
+  return el(
+    "div",
+    { class: on ? "farm-row is-on" : "farm-row", "data-drop": `farm:${farm.id}` },
+    arranging ? dragHandle(`farm:${farm.id}`, "Glisser pour déplacer") : null,
+    el(
+      "button",
+      {
+        type: "button",
+        class: on ? "farm-btn is-on" : "farm-btn",
+        "data-action": "select-farm",
+        "data-id": farm.id,
+      },
+      el("span", { class: "farm-name", "data-list-name": farm.id, text: farm.name.trim() || "Sans nom" }),
+      el("span", { class: "farm-meta", "data-list-meta": farm.id, text: metaText(farm) }),
+      el("span", {
+        class: "farm-price",
+        "data-list-price": farm.id,
+        text: result.ok ? `${P.formatAmount(result.perHourPrice)} c / h` : "—",
+      }),
+    ),
+    arranging
+      ? el(
+          "div",
+          { class: "farm-moves" },
+          moveButton("move-farm", farm.id, "up", index === 0),
+          moveButton("move-farm", farm.id, "down", index === count - 1),
+        )
+      : null,
+  );
+}
+
+function farmRows(farms) {
+  return farms.map((farm, index) => farmRow(farm, index, farms.length));
+}
+
+function categoryHead(category, closed) {
+  const siblings = state.categories.filter((entry) => (entry.parentId || null) === (category.parentId || null));
+  const index = siblings.findIndex((entry) => entry.id === category.id);
+  return el(
+    "div",
+    { class: "cat-head", "data-drop": `cat:${category.id}` },
+    arranging ? dragHandle(`cat:${category.id}`, "Glisser pour réordonner") : null,
+    el(
+      "button",
+      {
+        type: "button",
+        class: "cat-toggle",
+        "data-action": "toggle-category",
+        "data-id": category.id,
+        "aria-expanded": closed ? "false" : "true",
+      },
+      el("span", { class: "chevron", "aria-hidden": "true", text: closed ? "▸" : "▾" }),
+      el("span", { class: "cat-name", text: category.name.trim() || "Sans nom" }),
+    ),
+    arranging
+      ? el(
+          "div",
+          { class: "cat-tools" },
+          moveButton("move-category", category.id, "up", index <= 0),
+          moveButton("move-category", category.id, "down", index === siblings.length - 1),
+          el("button", {
+            type: "button",
+            class: "move-btn",
+            "data-action": "rename-category",
+            "data-id": category.id,
+            "aria-label": "Renommer",
+            text: "Nom",
+          }),
+          category.parentId
+            ? null
+            : el("button", {
+                type: "button",
+                class: "move-btn",
+                "data-action": "add-subcategory",
+                "data-id": category.id,
+                "aria-label": "Ajouter une sous-catégorie",
+                text: "+",
+              }),
+          el("button", {
+            type: "button",
+            class: "move-btn danger",
+            "data-action": "delete-category",
+            "data-id": category.id,
+            "aria-label": category.parentId ? "Supprimer la sous-catégorie" : "Supprimer la catégorie",
+            text: "×",
+          }),
+        )
+      : null,
+  );
+}
+
+function looseGroup(farms) {
+  return el(
+    "section",
+    { class: "farm-group", "data-drop": "into:loose" },
+    el("p", { class: "cat-label", text: "Sans catégorie" }),
+    farms.length ? farmRows(farms) : el("p", { class: "hint", text: "Dépose ici une ferme pour la sortir d'une catégorie." }),
+  );
+}
+
+function subcategoryBlock(category) {
+  const closed = (state.ui.collapsedIds || []).includes(category.id);
+  const farms = farmsIn(category.id);
+  return el(
+    "section",
+    { class: "farm-sub", "data-drop": `into:${category.id}` },
+    categoryHead(category, closed),
+    closed
+      ? null
+      : el(
+          "div",
+          { class: "farm-group-body" },
+          farms.length ? farmRows(farms) : el("p", { class: "hint", text: "Aucune ferme." }),
+        ),
+  );
+}
+
+function categoryBlock(category) {
+  const closed = (state.ui.collapsedIds || []).includes(category.id);
+  const subs = state.categories.filter((entry) => entry.parentId === category.id);
+  const farms = farmsIn(category.id);
+  return el(
+    "section",
+    { class: "farm-group", "data-drop": `into:${category.id}` },
+    categoryHead(category, closed),
+    closed
+      ? null
+      : el(
+          "div",
+          { class: "farm-group-body" },
+          farms.length ? farmRows(farms) : null,
+          subs.map((sub) => subcategoryBlock(sub)),
+          !farms.length && !subs.length ? el("p", { class: "hint", text: "Aucune ferme." }) : null,
+        ),
+  );
+}
+
+// Fermes d'une catégorie, puis ses sous-catégories. Pas plus d'un niveau.
+function farmListNodes() {
+  const tops = state.categories.filter((category) => !category.parentId);
+  const loose = farmsIn(null);
+  if (!tops.length) return farmRows(loose);
+  const nodes = [];
+  if (loose.length || arranging) nodes.push(looseGroup(loose));
+  for (const category of tops) nodes.push(categoryBlock(category));
+  return nodes;
+}
+
+function buildFarmButtons() {
+  const bar = document.getElementById("arrange-bar");
+  const slot = document.getElementById("farm-list");
+  if (!slot) return;
+  const list = slot.closest(".list");
+  const scroll = list ? list.scrollTop : 0;
+  if (bar) {
+    mount(
+      bar,
+      arranging
+        ? el(
+            "div",
+            { class: "arrange-bar" },
+            el("button", { type: "button", class: "btn small", "data-action": "add-category", text: "Nouvelle catégorie" }),
+            el("p", { class: "hint", text: "Flèches pour l'ordre. Glisse une ferme sur une catégorie pour l'y ranger." }),
+          )
+        : null,
+    );
+  }
+  const nodes = farmListNodes();
+  slot.replaceChildren(...(nodes.length ? nodes : [el("p", { class: "hint", text: "Aucune ferme pour l'instant." })]));
+  if (list) list.scrollTop = scroll;
+  const current = slot.querySelector(".farm-btn.is-on");
+  if (list && current) {
+    const listTop = list.getBoundingClientRect().top;
+    const rect = current.getBoundingClientRect();
+    if (rect.top < listTop) list.scrollTop -= listTop - rect.top;
+    else if (rect.bottom > listTop + list.clientHeight) list.scrollTop += rect.bottom - (listTop + list.clientHeight);
+  }
+}
+
+function clearDragStyles() {
+  document.querySelectorAll(".is-dragging, .is-drop").forEach((node) => node.classList.remove("is-dragging", "is-drop"));
+}
+
+function onDragStart(event) {
+  const handle = event.target.closest?.("[data-drag]");
+  if (!handle) return;
+  dragPayload = handle.dataset.drag;
+  event.dataTransfer.setData("text/plain", dragPayload);
+  event.dataTransfer.effectAllowed = "move";
+  handle.closest(".farm-row, .cat-head")?.classList.add("is-dragging");
+}
+
+function onDragOver(event) {
+  if (!dragPayload) return;
+  const zone = event.target.closest?.("[data-drop]");
+  if (!zone || !canDrop(dragPayload, zone.dataset.drop)) return;
+  event.preventDefault();
+  document.querySelectorAll(".is-drop").forEach((node) => {
+    if (node !== zone) node.classList.remove("is-drop");
+  });
+  zone.classList.add("is-drop");
+}
+
+function onDrop(event) {
+  const zone = event.target.closest?.("[data-drop]");
+  const payload = dragPayload;
+  if (!zone || !payload || !canDrop(payload, zone.dataset.drop)) return;
+  event.preventDefault();
+  const [kind, id] = splitPayload(payload);
+  const [zoneKind, zoneId] = splitPayload(zone.dataset.drop);
+  let effect = false;
+  if (kind === "farm" && zoneKind === "farm") effect = moveFarmBefore(id, zoneId);
+  else if (kind === "farm") effect = moveFarmInto(id, zoneId === "loose" ? null : zoneId);
+  else effect = moveCategoryBefore(id, zoneId);
+  if (!effect) return;
+  save();
+  buildFarmButtons();
+  if (effect === "category") buildEditor();
+}
+
+function onDragEnd() {
+  dragPayload = "";
+  clearDragStyles();
+}
+
+function onChange(event) {
+  const action = event.target?.dataset?.action;
+  if (action === "set-farm-category") setFarmCategory(event.target.value);
+  else if (action === "set-farm-subcategory") setFarmSubcategory(event.target.value);
+  else onFile(event);
+}
+
 
 function buildEditor() {
   const slot = document.getElementById("editor");
@@ -775,6 +1338,13 @@ function buildEditor() {
         el("button", { type: "button", class: "btn small", "data-action": "duplicate-farm", text: "Dupliquer" }),
         el("button", { type: "button", class: "btn small danger", "data-action": "delete-farm", text: "Supprimer" }),
       ),
+    ),
+    el(
+      "div",
+      { class: "block" },
+      el("span", { class: "field-label", text: "Classement" }),
+      placementFields(farm),
+      el("p", { class: "hint", text: "Le bouton Ranger change l'ordre des fermes et des catégories." }),
     ),
     el(
       "div",
@@ -1134,8 +1704,21 @@ function buildFarmsView() {
         "div",
         { class: "list-head" },
         el("h2", { text: "Tes fermes" }),
-        el("button", { type: "button", class: "btn small primary", "data-action": "add-farm", text: "Ajouter" }),
+        el(
+          "div",
+          { class: "row-actions" },
+          el("button", {
+            type: "button",
+            class: arranging ? "btn small is-on" : "btn small",
+            "data-action": "toggle-arrange",
+            "aria-pressed": arranging ? "true" : "false",
+            title: "Ordre, catégories et sous-catégories",
+            text: arranging ? "Terminer" : "Ranger",
+          }),
+          el("button", { type: "button", class: "btn small primary", "data-action": "add-farm", text: "Ajouter" }),
+        ),
       ),
+      el("div", { id: "arrange-bar" }),
       el("div", { id: "farm-list" }),
     ),
     el("section", { id: "editor", class: "editor" }),
@@ -1289,7 +1872,9 @@ function showTab(tab, options = {}) {
 
 function addFarm() {
   const farm = blankFarm();
-  state.farms.unshift(farm);
+  const current = selectedFarm();
+  farm.categoryId = current?.categoryId ?? null;
+  insertFarmAfter(farm, current?.id);
   state.ui.selectedFarmId = farm.id;
   save();
   buildFarmButtons();
@@ -1315,7 +1900,7 @@ function duplicateFarm() {
   copy.id = uid();
   copy.name = farm.name.trim() ? `${farm.name} (copie)` : "Copie";
   for (const line of [...copy.inputs, ...copy.materials]) line.id = uid();
-  state.farms.unshift(copy);
+  insertFarmAfter(copy, farm.id);
   state.ui.selectedFarmId = copy.id;
   save();
   buildFarmButtons();
@@ -1529,6 +2114,14 @@ function onClick(event) {
   if (action === "tab") showTab(actionEl.dataset.tab);
   else if (action === "add-farm") addFarm();
   else if (action === "select-farm") selectFarm(actionEl.dataset.id);
+  else if (action === "toggle-arrange") toggleArrange();
+  else if (action === "add-category") addCategory();
+  else if (action === "add-subcategory") addSubcategory(actionEl.dataset.id);
+  else if (action === "rename-category") renameCategory(actionEl.dataset.id);
+  else if (action === "delete-category") deleteCategory(actionEl.dataset.id);
+  else if (action === "toggle-category") toggleCategory(actionEl.dataset.id);
+  else if (action === "move-farm") moveFarm(actionEl.dataset.id, actionEl.dataset.dir);
+  else if (action === "move-category") moveCategory(actionEl.dataset.id, actionEl.dataset.dir);
   else if (action === "duplicate-farm") duplicateFarm();
   else if (action === "delete-farm") deleteFarm();
   else if (action === "difficulty") setDifficulty(Number(actionEl.dataset.level));
@@ -1560,6 +2153,10 @@ if (!P) {
   document.addEventListener("click", onClick);
   document.addEventListener("input", onInput);
   document.addEventListener("focusout", onBlur);
-  document.addEventListener("change", onFile);
+  document.addEventListener("change", onChange);
+  document.addEventListener("dragstart", onDragStart);
+  document.addEventListener("dragover", onDragOver);
+  document.addEventListener("drop", onDrop);
+  document.addEventListener("dragend", onDragEnd);
   showTab(state.ui.tab || "farms", { rebuild: true });
 }
